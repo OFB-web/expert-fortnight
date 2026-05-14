@@ -87,7 +87,7 @@ exports.rejectDonor = catchAsync(async (req, res, next) => {
   await notify({
     userId: donor.user,
     type: 'donor_rejected',
-    message: `Your donor profile has been rejected.${reasonText}`,
+    message: `After reviewing your application, we regret to inform you that you do not currently meet the medical requirements to donate blood at this time.${reasonText} You may reapply once the condition has been addressed.`,
     relatedId: donor._id,
   });
 
@@ -245,8 +245,9 @@ exports.listDonorApplications = catchAsync(async (req, res) => {
   const total = await DonorProfile.countDocuments(filter);
 
   const donors = await DonorProfile.find(filter)
-    .populate('user', 'fullName email phone city')
+    .populate('user', 'fullName email phone city profilePhoto')
     .populate('approvedBy', 'fullName email')
+    .select('-medicalDocData')
     .sort({ createdAt: -1 })
     .skip(skip)
     .limit(Number(limit));
@@ -258,6 +259,22 @@ exports.listDonorApplications = catchAsync(async (req, res) => {
     pages: Math.ceil(total / Number(limit)),
     data: { donors },
   });
+});
+
+// ─── GET /api/v1/admin/donors/:id ────────────────────────────────────────────
+// Full donor profile for admin review — includes medicalDocData (ADMIN06b).
+exports.getDonorApplication = catchAsync(async (req, res, next) => {
+  if (!mongoose.isValidObjectId(req.params.id)) {
+    return next(new ApiError(400, 'Invalid donor profile ID.'));
+  }
+
+  const donor = await DonorProfile.findById(req.params.id)
+    .populate('user', 'fullName email phone city profilePhoto')
+    .populate('approvedBy', 'fullName email');
+
+  if (!donor) return next(new ApiError(404, 'Donor profile not found.'));
+
+  res.status(200).json({ status: 'success', data: { donor } });
 });
 
 // ─── GET /api/v1/admin/requests ───────────────────────────────────────────────
