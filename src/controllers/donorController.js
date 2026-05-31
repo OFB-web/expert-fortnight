@@ -63,17 +63,29 @@ exports.searchDonors = catchAsync(async (req, res) => {
     .skip(skip)
     .limit(Number(limit));
 
-  // Determine which donors have unlocked phone for the current user
   const donorUserIds = donors.map((d) => d.user._id);
+
+  // Accepted contact requests → phone is visible
   const unlockedSet = await getUnlockedDonorIds(req.user._id, donorUserIds);
 
-  const results = donors.map((d) => { 
-    const obj = d.toObject();
-    applyPhoneVisibility(obj, d.user._id, unlockedSet);
-    return obj;
+  // Most-recent contact request status per donor for the current seeker
+  const allRequests = await ContactRequest.find({
+    seeker: req.user._id,
+    donor: { $in: donorUserIds },
+  }).select('donor status').sort({ createdAt: -1 });
+
+  const statusMap = {};
+  allRequests.forEach((r) => {
+    const key = r.donor.toString();
+    if (!statusMap[key]) statusMap[key] = r.status; // keep most recent (sorted desc)
   });
 
-  console.log("donors>>>>>>>> ", results)
+  const results = donors.map((d) => {
+    const obj = d.toObject();
+    applyPhoneVisibility(obj, d.user._id, unlockedSet);
+    obj.contactRequestStatus = statusMap[d.user._id.toString()] || null;
+    return obj;
+  });
 
   res.status(200).json({
     status: 'success',
@@ -132,6 +144,18 @@ exports.applyToBeDonor = catchAsync(async (req, res, next) => {
     donationType,
     donationAmount,
     donationCapacity,
+    // New fields
+    dob,
+    notes,
+    medicalDoc,
+    medicalDocData,
+    registrationType,
+    registeredByName,
+    // User-level fields sent from the registration form
+    phone,
+    city,
+    fullName,
+    profilePhoto,
   } = req.body;
 
   if (!bloodGroup) return next(new ApiError(400, 'Blood group is required.'));
@@ -145,10 +169,26 @@ exports.applyToBeDonor = catchAsync(async (req, res, next) => {
     donationType,
     donationAmount,
     donationCapacity,
+    dob,
+    notes,
+    medicalDoc,
+    medicalDocData,
+    registrationType: registrationType || 'self',
+    registeredByName,
     registeredBy: req.user._id,
     isApproved: false,
     approvalStatus: 'pending',
   });
+
+  // Update User profile with personal details from the registration form
+  const userUpdates = {};
+  if (phone)        userUpdates.phone        = phone;
+  if (city)         userUpdates.city         = city;
+  if (fullName)     userUpdates.fullName     = fullName;
+  if (profilePhoto) userUpdates.profilePhoto = profilePhoto;
+  if (Object.keys(userUpdates).length) {
+    await User.findByIdAndUpdate(req.user._id, userUpdates);
+  }
 
   // Ensure the user has the 'donor' role
   if (!req.user.roles.includes('donor')) {
